@@ -1,0 +1,13 @@
+node_modules/
+artifacts/
+cache/
+typechain-types/
+coverage/
+coverage.json
+dist/
+
+# Secrets
+.env
+
+# Keep deployment records, ignore local-only ones
+deployments/localhost.json
