@@ -13,6 +13,10 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 ///         Custodial: only the platform owner moves funds, mirroring
 ///         PropertyTitle's trust model. The tenant pays the platform off-chain;
 ///         the owner funds the on-chain escrow.
+/// @dev    `token` MUST be a standard, non-fee-on-transfer, non-rebasing ERC-20
+///         stablecoin. The contract pays out the stored `rentAmount`/`depositAmount`
+///         exactly; a fee-on-transfer token would under-fund the shared balance and
+///         cause later transfers to revert.
 contract LeaseEscrow is Ownable, ReentrancyGuard {
     using SafeERC20 for IERC20;
 
@@ -30,6 +34,8 @@ contract LeaseEscrow is Ownable, ReentrancyGuard {
     }
 
     uint256 private _nextEscrowId = 1;
+    // Invariant: the contract's token balance must always cover the sum of all
+    //            outstanding (non-Closed) escrow obligations.
     mapping(uint256 => Escrow) private _escrows;
 
     event EscrowFunded(uint256 indexed escrowId, string leaseId, address indexed landlord, address indexed tenant, uint256 rentAmount, uint256 depositAmount);
@@ -105,7 +111,8 @@ contract LeaseEscrow is Ownable, ReentrancyGuard {
     }
 
     function escrowState(uint256 escrowId) external view returns (State) {
-        require(_escrows[escrowId].state != State.None, "no escrow");
-        return _escrows[escrowId].state;
+        State s = _escrows[escrowId].state;
+        require(s != State.None, "no escrow");
+        return s;
     }
 }

@@ -237,4 +237,154 @@ describe("LeaseEscrow", () => {
       await expect(escrow.escrowState(99)).to.be.revertedWith("no escrow");
     });
   });
+
+  // ────────────────────────────────────────────────────────────
+  // 7. multi-escrow: id increment + interleaved settlement
+  // ────────────────────────────────────────────────────────────
+  describe("multi-escrow: id increment and interleaved settlement", () => {
+    it("second escrow gets id 2 and settling in interleaved order moves correct amounts", async () => {
+      const [owner, landlord1, tenant1, landlord2, tenant2] =
+        await ethers.getSigners();
+
+      const TokenFactory = await ethers.getContractFactory("MockERC20");
+      const token = (await TokenFactory.deploy()) as MockERC20;
+      await token.waitForDeployment();
+
+      const EscrowFactory = await ethers.getContractFactory("LeaseEscrow");
+      const escrow = (await EscrowFactory.deploy()) as LeaseEscrow;
+      await escrow.waitForDeployment();
+      const escrowAddr = await escrow.getAddress();
+      const tokenAddr = await token.getAddress();
+
+      // Fund owner with tokens for both escrows and approve
+      await token.mint(owner.address, (RENT + DEPOSIT) * 2n);
+      await token
+        .connect(owner)
+        .approve(escrowAddr, (RENT + DEPOSIT) * 2n);
+
+      // Open escrow #1 — expect id 1
+      const tx1 = await escrow.openAndFund(
+        "lease-1",
+        landlord1.address,
+        tenant1.address,
+        tokenAddr,
+        RENT,
+        DEPOSIT,
+        TERMS_HASH,
+      );
+      await expect(tx1)
+        .to.emit(escrow, "EscrowFunded")
+        .withArgs(1n, "lease-1", landlord1.address, tenant1.address, RENT, DEPOSIT);
+
+      // Open escrow #2 — expect id 2
+      const tx2 = await escrow.openAndFund(
+        "lease-2",
+        landlord2.address,
+        tenant2.address,
+        tokenAddr,
+        RENT,
+        DEPOSIT,
+        TERMS_HASH,
+      );
+      await expect(tx2)
+        .to.emit(escrow, "EscrowFunded")
+        .withArgs(2n, "lease-2", landlord2.address, tenant2.address, RENT, DEPOSIT);
+
+      // Contract holds both pools
+      expect(await token.balanceOf(escrowAddr)).to.equal((RENT + DEPOSIT) * 2n);
+
+      // Interleaved: activate #1 → landlord1 gets RENT
+      await escrow.activate(1n);
+      expect(await token.balanceOf(landlord1.address)).to.equal(RENT);
+      // remaining in contract: escrow1.deposit + escrow2.(rent+deposit)
+      expect(await token.balanceOf(escrowAddr)).to.equal(DEPOSIT + RENT + DEPOSIT);
+
+      // activate #2 → landlord2 gets RENT
+      await escrow.activate(2n);
+      expect(await token.balanceOf(landlord2.address)).to.equal(RENT);
+      // remaining: only the two deposits
+      expect(await token.balanceOf(escrowAddr)).to.equal(DEPOSIT * 2n);
+
+      // refundDeposit #1 → deposit goes to tenant1
+      await escrow.refundDeposit(1n);
+      expect(await token.balanceOf(tenant1.address)).to.equal(DEPOSIT);
+      expect(await escrow.escrowState(1n)).to.equal(3); // State.Closed
+
+      // releaseDeposit #2 → deposit goes to landlord2
+      await escrow.releaseDeposit(2n);
+      expect(await token.balanceOf(landlord2.address)).to.equal(RENT + DEPOSIT);
+      expect(await escrow.escrowState(2n)).to.equal(3); // State.Closed
+
+      // Contract is now empty
+      expect(await token.balanceOf(escrowAddr)).to.equal(0n);
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // 8. openAndFund reverts when allowance is insufficient
+  // ────────────────────────────────────────────────────────────
+  describe("openAndFund reverts on insufficient allowance", () => {
+    it("reverts (ERC20InsufficientAllowance) and leaves no escrow row", async () => {
+      const [owner, landlord, tenant] = await ethers.getSigners();
+
+      const TokenFactory = await ethers.getContractFactory("MockERC20");
+      const token = (await TokenFactory.deploy()) as MockERC20;
+      await token.waitForDeployment();
+
+      const EscrowFactory = await ethers.getContractFactory("LeaseEscrow");
+      const escrow = (await EscrowFactory.deploy()) as LeaseEscrow;
+      await escrow.waitForDeployment();
+
+      // Mint tokens to owner but do NOT approve the escrow contract
+      await token.mint(owner.address, RENT + DEPOSIT);
+      // (no approve call)
+
+      await expect(
+        escrow.openAndFund(
+          "lease-no-approve",
+          landlord.address,
+          tenant.address,
+          await token.getAddress(),
+          RENT,
+          DEPOSIT,
+          TERMS_HASH,
+        ),
+      ).to.be.revertedWithCustomError(token, "ERC20InsufficientAllowance");
+
+      // No escrow row should have been persisted — the state write happens before
+      // the token transfer, but the revert rolls back the entire transaction
+      await expect(escrow.escrowState(1)).to.be.revertedWith("no escrow");
+    });
+  });
+
+  // ────────────────────────────────────────────────────────────
+  // 9. non-owner access control: cancel, releaseDeposit, refundDeposit
+  // ────────────────────────────────────────────────────────────
+  describe("non-owner access control", () => {
+    it("cancel reverts with OwnableUnauthorizedAccount for non-owner", async () => {
+      const { escrow, token, landlord, tenant, other } = await deploy();
+      const escrowId = await fundEscrow(escrow, token, landlord, tenant);
+      await expect(
+        escrow.connect(other).cancel(escrowId),
+      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+    });
+
+    it("releaseDeposit reverts with OwnableUnauthorizedAccount for non-owner", async () => {
+      const { escrow, token, landlord, tenant, other } = await deploy();
+      const escrowId = await fundEscrow(escrow, token, landlord, tenant);
+      await escrow.activate(escrowId); // must be Active for releaseDeposit to be meaningful
+      await expect(
+        escrow.connect(other).releaseDeposit(escrowId),
+      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+    });
+
+    it("refundDeposit reverts with OwnableUnauthorizedAccount for non-owner", async () => {
+      const { escrow, token, landlord, tenant, other } = await deploy();
+      const escrowId = await fundEscrow(escrow, token, landlord, tenant);
+      await escrow.activate(escrowId);
+      await expect(
+        escrow.connect(other).refundDeposit(escrowId),
+      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+    });
+  });
 });
