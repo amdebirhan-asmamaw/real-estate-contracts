@@ -125,4 +125,17 @@ contract PropertyTitle is ERC721, Ownable {
         _titleStatus[tokenId] = TitleStatus.Revoked;
         emit TitleStatusChanged(tokenId, TitleStatus.Revoked, reason);
     }
+
+    // ─── Token URI (off-chain metadata) ──────────────────────────────────────
+
+    string private _baseTokenURI;
+
+    /// @notice Sets the base URI for token metadata (e.g. https://api.example.com/titles/).
+    function setBaseURI(string calldata baseURI) external onlyOwner {
+        _baseTokenURI = baseURI;
+    }
+
+    function _baseURI() internal view override returns (string memory) {
+        return _baseTokenURI;
+    }
 }

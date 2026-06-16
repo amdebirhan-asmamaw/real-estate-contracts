@@ -96,4 +96,26 @@ describe("PropertyTitle", () => {
     const { contract } = await deploy();
     await expect(contract.documentHashOf(999)).to.be.reverted;
   });
+
+  it("returns empty tokenURI by default", async () => {
+    const { contract, other } = await deploy();
+    const hash = ethers.id("doc");
+    await contract.mintTitle(other.address, "L1", hash);
+    expect(await contract.tokenURI(1)).to.equal("");
+  });
+
+  it("returns correct tokenURI after setBaseURI", async () => {
+    const { contract, other } = await deploy();
+    const hash = ethers.id("doc");
+    await contract.mintTitle(other.address, "L1", hash);
+    await contract.setBaseURI("https://api.example.com/titles/");
+    expect(await contract.tokenURI(1)).to.equal("https://api.example.com/titles/1");
+  });
+
+  it("reverts when a non-owner tries to setBaseURI", async () => {
+    const { contract, other } = await deploy();
+    await expect(
+      contract.connect(other).setBaseURI("https://evil.com/"),
+    ).to.be.revertedWithCustomError(contract, "OwnableUnauthorizedAccount");
+  });
 });
