@@ -2,14 +2,17 @@
 pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC721/ERC721.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 
 /// @title PropertyTitle
 /// @notice ERC-721 digital title for a verified real-estate listing. Each token
 ///         anchors the sha-256 hash of the approved ownership document and the
 ///         off-chain listing id. Minting is restricted to the platform owner
 ///         (the custodial minter wallet) in this increment.
-contract PropertyTitle is ERC721, Ownable {
+contract PropertyTitle is ERC721, Ownable, AccessControl, Pausable {
+    bytes32 public constant TITLE_OPERATOR_ROLE = keccak256("TITLE_OPERATOR_ROLE");
     enum TitleStatus {
         None,
         Active,
@@ -38,8 +41,34 @@ contract PropertyTitle is ERC721, Ownable {
         TitleStatus indexed status,
         string reason
     );
+    event TitleOperatorUpdated(address indexed account, bool enabled);
 
-    constructor() ERC721("PropertyTitle", "PTITLE") Ownable(msg.sender) {}
+    constructor() ERC721("PropertyTitle", "PTITLE") Ownable(msg.sender) {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(TITLE_OPERATOR_ROLE, msg.sender);
+    }
+
+    modifier onlyTitleOperator() {
+        _checkRole(TITLE_OPERATOR_ROLE, msg.sender);
+        _;
+    }
+
+    function setTitleOperator(address account, bool enabled) external onlyOwner {
+        if (enabled) {
+            _grantRole(TITLE_OPERATOR_ROLE, account);
+        } else {
+            _revokeRole(TITLE_OPERATOR_ROLE, account);
+        }
+        emit TitleOperatorUpdated(account, enabled);
+    }
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
 
     /// @notice Mints a title to `to`, anchoring the listing id and document hash.
     /// @dev onlyOwner — the backend's custodial minter wallet. A later increment
@@ -48,7 +77,7 @@ contract PropertyTitle is ERC721, Ownable {
         address to,
         string calldata listingId,
         bytes32 documentHash
-    ) external onlyOwner returns (uint256 tokenId) {
+    ) external onlyTitleOperator whenNotPaused returns (uint256 tokenId) {
         bytes32 listingHash = keccak256(bytes(listingId));
         uint256 existingTokenId = _tokenByListingHash[listingHash];
         if (existingTokenId != 0) {
@@ -90,7 +119,7 @@ contract PropertyTitle is ERC721, Ownable {
     function markDisputed(
         uint256 tokenId,
         string calldata reason
-    ) external onlyOwner {
+    ) external onlyTitleOperator whenNotPaused {
         _requireOwned(tokenId);
         TitleStatus current = _titleStatus[tokenId];
         if (current != TitleStatus.Active) {
@@ -103,7 +132,7 @@ contract PropertyTitle is ERC721, Ownable {
     function clearDispute(
         uint256 tokenId,
         string calldata reason
-    ) external onlyOwner {
+    ) external onlyTitleOperator whenNotPaused {
         _requireOwned(tokenId);
         TitleStatus current = _titleStatus[tokenId];
         if (current != TitleStatus.Disputed) {
@@ -116,7 +145,7 @@ contract PropertyTitle is ERC721, Ownable {
     function revokeTitle(
         uint256 tokenId,
         string calldata reason
-    ) external onlyOwner {
+    ) external onlyTitleOperator whenNotPaused {
         _requireOwned(tokenId);
         TitleStatus current = _titleStatus[tokenId];
         if (current == TitleStatus.Revoked) {
@@ -137,5 +166,11 @@ contract PropertyTitle is ERC721, Ownable {
 
     function _baseURI() internal view override returns (string memory) {
         return _baseTokenURI;
+    }
+
+    function supportsInterface(
+        bytes4 interfaceId
+    ) public view override(ERC721, AccessControl) returns (bool) {
+        return super.supportsInterface(interfaceId);
     }
 }

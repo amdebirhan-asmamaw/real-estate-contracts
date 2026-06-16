@@ -12,12 +12,6 @@ async function main(): Promise<void> {
   record.propertyTitle = record.address;
   console.log(`PropertyTitle deployed to ${record.address} on "${network.name}"`);
 
-  const Escrow = await ethers.getContractFactory("LeaseEscrow");
-  const escrow = await Escrow.deploy();
-  await escrow.waitForDeployment();
-  record.leaseEscrow = await escrow.getAddress();
-  console.log(`LeaseEscrow deployed to ${record.leaseEscrow} on "${network.name}"`);
-
   // A mock stablecoin is only useful off mainnet, for local/testnet demos.
   if (network.name !== "mainnet") {
     const Token = await ethers.getContractFactory("MockERC20");
@@ -25,6 +19,19 @@ async function main(): Promise<void> {
     await token.waitForDeployment();
     record.mockToken = await token.getAddress();
     console.log(`MockERC20 deployed to ${record.mockToken} on "${network.name}"`);
+  }
+
+  const Escrow = await ethers.getContractFactory("LeaseEscrow");
+  const escrow = await Escrow.deploy();
+  await escrow.waitForDeployment();
+  record.leaseEscrow = await escrow.getAddress();
+  console.log(`LeaseEscrow deployed to ${record.leaseEscrow} on "${network.name}"`);
+
+  const escrowToken = process.env.ESCROW_TOKEN_ADDRESS || record.mockToken;
+  if (escrowToken) {
+    await (await escrow.setTokenAllowed(escrowToken, true)).wait();
+    record.escrowToken = escrowToken;
+    console.log(`LeaseEscrow allowlisted token ${escrowToken}`);
   }
 
   const dir = path.join(__dirname, "..", "deployments");

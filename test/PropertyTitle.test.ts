@@ -44,7 +44,18 @@ describe("PropertyTitle", () => {
     const hash = ethers.id("doc");
     await expect(
       contract.connect(other).mintTitle(other.address, "L1", hash),
-    ).to.be.revertedWithCustomError(contract, "OwnableUnauthorizedAccount");
+    ).to.be.revertedWithCustomError(contract, "AccessControlUnauthorizedAccount");
+  });
+
+  it("lets the owner delegate title operations", async () => {
+    const { contract, other } = await deploy();
+    const hash = ethers.id("doc");
+    await expect(contract.setTitleOperator(other.address, true))
+      .to.emit(contract, "TitleOperatorUpdated")
+      .withArgs(other.address, true);
+
+    await contract.connect(other).mintTitle(other.address, "L1", hash);
+    expect(await contract.ownerOf(1)).to.equal(other.address);
   });
 
   it("reverts when minting a second title for the same listing", async () => {
@@ -117,5 +128,18 @@ describe("PropertyTitle", () => {
     await expect(
       contract.connect(other).setBaseURI("https://evil.com/"),
     ).to.be.revertedWithCustomError(contract, "OwnableUnauthorizedAccount");
+  });
+
+  it("blocks title operations while paused", async () => {
+    const { contract, other } = await deploy();
+    await contract.pause();
+
+    await expect(
+      contract.mintTitle(other.address, "L1", ethers.id("doc")),
+    ).to.be.revertedWithCustomError(contract, "EnforcedPause");
+
+    await contract.unpause();
+    await contract.mintTitle(other.address, "L1", ethers.id("doc"));
+    expect(await contract.ownerOf(1)).to.equal(other.address);
   });
 });

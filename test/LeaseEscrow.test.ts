@@ -25,6 +25,7 @@ describe("LeaseEscrow", () => {
     const EscrowFactory = await ethers.getContractFactory("LeaseEscrow");
     const escrow = (await EscrowFactory.deploy()) as LeaseEscrow;
     await escrow.waitForDeployment();
+    await escrow.setTokenAllowed(await token.getAddress(), true);
 
     // Owner (platform wallet) gets RENT+DEPOSIT and approves the escrow
     await token.mint(owner.address, RENT + DEPOSIT);
@@ -107,7 +108,32 @@ describe("LeaseEscrow", () => {
             DEPOSIT,
             TERMS_HASH,
           ),
-      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWithCustomError(escrow, "AccessControlUnauthorizedAccount");
+    });
+
+    it("reverts when the token has not been allowlisted", async () => {
+      const [owner, landlord, tenant] = await ethers.getSigners();
+      const TokenFactory = await ethers.getContractFactory("MockERC20");
+      const token = (await TokenFactory.deploy()) as MockERC20;
+      await token.waitForDeployment();
+
+      const EscrowFactory = await ethers.getContractFactory("LeaseEscrow");
+      const escrow = (await EscrowFactory.deploy()) as LeaseEscrow;
+      await escrow.waitForDeployment();
+      await token.mint(owner.address, RENT + DEPOSIT);
+      await token.approve(await escrow.getAddress(), RENT + DEPOSIT);
+
+      await expect(
+        escrow.openAndFund(
+          "lease-1",
+          landlord.address,
+          tenant.address,
+          await token.getAddress(),
+          RENT,
+          DEPOSIT,
+          TERMS_HASH,
+        ),
+      ).to.be.revertedWith("token not allowed");
     });
   });
 
@@ -142,7 +168,7 @@ describe("LeaseEscrow", () => {
       const escrowId = await fundEscrow(escrow, token, landlord, tenant);
       await expect(
         escrow.connect(other).activate(escrowId),
-      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWithCustomError(escrow, "AccessControlUnauthorizedAccount");
     });
   });
 
@@ -255,6 +281,7 @@ describe("LeaseEscrow", () => {
       await escrow.waitForDeployment();
       const escrowAddr = await escrow.getAddress();
       const tokenAddr = await token.getAddress();
+      await escrow.setTokenAllowed(tokenAddr, true);
 
       // Fund owner with tokens for both escrows and approve
       await token.mint(owner.address, (RENT + DEPOSIT) * 2n);
@@ -334,6 +361,7 @@ describe("LeaseEscrow", () => {
       const EscrowFactory = await ethers.getContractFactory("LeaseEscrow");
       const escrow = (await EscrowFactory.deploy()) as LeaseEscrow;
       await escrow.waitForDeployment();
+      await escrow.setTokenAllowed(await token.getAddress(), true);
 
       // Mint tokens to owner but do NOT approve the escrow contract
       await token.mint(owner.address, RENT + DEPOSIT);
@@ -358,33 +386,81 @@ describe("LeaseEscrow", () => {
   });
 
   // ────────────────────────────────────────────────────────────
-  // 9. non-owner access control: cancel, releaseDeposit, refundDeposit
+  // 9. non-operator access control: cancel, releaseDeposit, refundDeposit
   // ────────────────────────────────────────────────────────────
   describe("non-owner access control", () => {
-    it("cancel reverts with OwnableUnauthorizedAccount for non-owner", async () => {
+    it("cancel reverts with AccessControlUnauthorizedAccount for non-operator", async () => {
       const { escrow, token, landlord, tenant, other } = await deploy();
       const escrowId = await fundEscrow(escrow, token, landlord, tenant);
       await expect(
         escrow.connect(other).cancel(escrowId),
-      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWithCustomError(escrow, "AccessControlUnauthorizedAccount");
     });
 
-    it("releaseDeposit reverts with OwnableUnauthorizedAccount for non-owner", async () => {
+    it("releaseDeposit reverts with AccessControlUnauthorizedAccount for non-operator", async () => {
       const { escrow, token, landlord, tenant, other } = await deploy();
       const escrowId = await fundEscrow(escrow, token, landlord, tenant);
       await escrow.activate(escrowId); // must be Active for releaseDeposit to be meaningful
       await expect(
         escrow.connect(other).releaseDeposit(escrowId),
-      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWithCustomError(escrow, "AccessControlUnauthorizedAccount");
     });
 
-    it("refundDeposit reverts with OwnableUnauthorizedAccount for non-owner", async () => {
+    it("refundDeposit reverts with AccessControlUnauthorizedAccount for non-operator", async () => {
       const { escrow, token, landlord, tenant, other } = await deploy();
       const escrowId = await fundEscrow(escrow, token, landlord, tenant);
       await escrow.activate(escrowId);
       await expect(
         escrow.connect(other).refundDeposit(escrowId),
-      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWithCustomError(escrow, "AccessControlUnauthorizedAccount");
+    });
+  });
+
+  describe("operator and pause controls", () => {
+    it("lets the owner delegate escrow operations", async () => {
+      const { escrow, token, landlord, tenant, other } = await deploy();
+      const escrowAddr = await escrow.getAddress();
+      await token.mint(other.address, RENT + DEPOSIT);
+      await token.connect(other).approve(escrowAddr, RENT + DEPOSIT);
+
+      await expect(escrow.setEscrowOperator(other.address, true))
+        .to.emit(escrow, "EscrowOperatorUpdated")
+        .withArgs(other.address, true);
+
+      await escrow
+        .connect(other)
+        .openAndFund(
+          "lease-operator",
+          landlord.address,
+          tenant.address,
+          await token.getAddress(),
+          RENT,
+          DEPOSIT,
+          TERMS_HASH,
+        );
+
+      expect(await escrow.escrowState(1)).to.equal(1);
+    });
+
+    it("blocks state-changing escrow operations while paused", async () => {
+      const { escrow, token, landlord, tenant } = await deploy();
+      await escrow.pause();
+
+      await expect(
+        escrow.openAndFund(
+          "lease-paused",
+          landlord.address,
+          tenant.address,
+          await token.getAddress(),
+          RENT,
+          DEPOSIT,
+          TERMS_HASH,
+        ),
+      ).to.be.revertedWithCustomError(escrow, "EnforcedPause");
+
+      await escrow.unpause();
+      await fundEscrow(escrow, token, landlord, tenant);
+      expect(await escrow.escrowState(1)).to.equal(1);
     });
   });
 });
