@@ -18,6 +18,8 @@ describe("PropertyTitle", () => {
     expect(await contract.ownerOf(1)).to.equal(other.address);
     expect(await contract.documentHashOf(1)).to.equal(hash);
     expect(await contract.listingIdOf(1)).to.equal("listing-1");
+    expect(await contract.tokenIdOfListing("listing-1")).to.equal(1);
+    expect(await contract.titleStatusOf(1)).to.equal(1); // Active
   });
 
   it("increments token ids", async () => {
@@ -43,6 +45,51 @@ describe("PropertyTitle", () => {
     await expect(
       contract.connect(other).mintTitle(other.address, "L1", hash),
     ).to.be.revertedWithCustomError(contract, "OwnableUnauthorizedAccount");
+  });
+
+  it("reverts when minting a second title for the same listing", async () => {
+    const { contract, other } = await deploy();
+    const hash = ethers.id("doc");
+    await contract.mintTitle(other.address, "L1", hash);
+
+    await expect(
+      contract.mintTitle(other.address, "L1", hash),
+    ).to.be.revertedWithCustomError(contract, "ListingAlreadyMinted");
+  });
+
+  it("lets the owner mark, clear, and revoke title status", async () => {
+    const { contract, other } = await deploy();
+    const hash = ethers.id("doc");
+    await contract.mintTitle(other.address, "L1", hash);
+
+    await expect(contract.markDisputed(1, "court filing"))
+      .to.emit(contract, "TitleStatusChanged")
+      .withArgs(1, 2, "court filing");
+    expect(await contract.titleStatusOf(1)).to.equal(2); // Disputed
+
+    await expect(contract.clearDispute(1, "resolved"))
+      .to.emit(contract, "TitleStatusChanged")
+      .withArgs(1, 1, "resolved");
+    expect(await contract.titleStatusOf(1)).to.equal(1); // Active
+
+    await expect(contract.revokeTitle(1, "invalid title"))
+      .to.emit(contract, "TitleStatusChanged")
+      .withArgs(1, 3, "invalid title");
+    expect(await contract.titleStatusOf(1)).to.equal(3); // Revoked
+  });
+
+  it("blocks invalid status transitions", async () => {
+    const { contract, other } = await deploy();
+    const hash = ethers.id("doc");
+    await contract.mintTitle(other.address, "L1", hash);
+
+    await expect(
+      contract.clearDispute(1, "not disputed"),
+    ).to.be.revertedWithCustomError(contract, "InvalidTitleStatus");
+    await contract.revokeTitle(1, "invalid");
+    await expect(
+      contract.markDisputed(1, "too late"),
+    ).to.be.revertedWithCustomError(contract, "InvalidTitleStatus");
   });
 
   it("reverts reading a non-existent token", async () => {
