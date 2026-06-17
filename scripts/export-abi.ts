@@ -7,6 +7,7 @@ const targets = [
   { sol: "PropertyTitle.sol", name: "PropertyTitle" },
   { sol: "LeaseEscrow.sol", name: "LeaseEscrow" },
   { sol: "mocks/MockERC20.sol", name: "MockERC20" },
+  { sol: "SaleEscrow.sol", name: "SaleEscrow" },
 ];
 
 const outDir = path.join(__dirname, "..", "abi");

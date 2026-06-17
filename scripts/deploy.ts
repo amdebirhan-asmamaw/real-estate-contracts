@@ -34,6 +34,12 @@ async function main(): Promise<void> {
     console.log(`LeaseEscrow allowlisted token ${escrowToken}`);
   }
 
+  const SaleEscrowFactory = await ethers.getContractFactory("SaleEscrow");
+  const saleEscrow = await SaleEscrowFactory.deploy();
+  await saleEscrow.waitForDeployment();
+  record.saleEscrow = await saleEscrow.getAddress();
+  console.log(`SaleEscrow deployed to ${record.saleEscrow} on "${network.name}"`);
+
   const dir = path.join(__dirname, "..", "deployments");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(
