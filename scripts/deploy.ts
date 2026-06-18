@@ -3,6 +3,16 @@ import * as fs from "fs";
 import * as path from "path";
 
 async function main(): Promise<void> {
+  // Guard: mainnet requires a real stablecoin address to allowlist on the
+  // escrow contracts. Deploying without one leaves them permanently broken
+  // (openAndFund always reverts "token not allowed").
+  if (network.name === "mainnet" && !process.env.ESCROW_TOKEN_ADDRESS) {
+    throw new Error(
+      "ESCROW_TOKEN_ADDRESS must be set when deploying to mainnet. " +
+        "Provide the address of the ERC-20 stablecoin to allowlist on LeaseEscrow and SaleEscrow.",
+    );
+  }
+
   const record: Record<string, string> = { network: network.name };
 
   const Title = await ethers.getContractFactory("PropertyTitle");
@@ -43,6 +53,23 @@ async function main(): Promise<void> {
   if (escrowToken) {
     await (await saleEscrow.setTokenAllowed(escrowToken, true)).wait();
     console.log(`SaleEscrow allowlisted token ${escrowToken}`);
+  }
+
+  // Optional: delegate operator role on all three contracts to a separate wallet.
+  // Set OPERATOR_ADDRESS in .env to split the admin (owner) and day-to-day
+  // operator roles after deploy.
+  const operatorAddress = process.env.OPERATOR_ADDRESS;
+  if (operatorAddress) {
+    await (await title.setTitleOperator(operatorAddress, true)).wait();
+    console.log(`PropertyTitle: granted TITLE_OPERATOR_ROLE to ${operatorAddress}`);
+
+    await (await escrow.setEscrowOperator(operatorAddress, true)).wait();
+    console.log(`LeaseEscrow: granted ESCROW_OPERATOR_ROLE to ${operatorAddress}`);
+
+    await (await saleEscrow.setSaleEscrowOperator(operatorAddress, true)).wait();
+    console.log(`SaleEscrow: granted SALE_ESCROW_OPERATOR_ROLE to ${operatorAddress}`);
+
+    record.operatorAddress = operatorAddress;
   }
 
   const dir = path.join(__dirname, "..", "deployments");

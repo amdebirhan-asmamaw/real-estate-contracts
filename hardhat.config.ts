@@ -23,6 +23,12 @@ const config: HardhatUserConfig = {
         : [],
     },
   },
+  // hardhat-verify is bundled with hardhat-toolbox (already imported above).
+  // Set ETHERSCAN_API_KEY in .env, then run:
+  //   npx hardhat verify --network sepolia <CONTRACT_ADDRESS> [constructor args]
+  etherscan: {
+    apiKey: process.env.ETHERSCAN_API_KEY || "",
+  },
 };
 
 export default config;
