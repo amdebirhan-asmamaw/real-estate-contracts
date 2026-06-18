@@ -40,6 +40,11 @@ async function main(): Promise<void> {
   record.saleEscrow = await saleEscrow.getAddress();
   console.log(`SaleEscrow deployed to ${record.saleEscrow} on "${network.name}"`);
 
+  if (escrowToken) {
+    await (await saleEscrow.setTokenAllowed(escrowToken, true)).wait();
+    console.log(`SaleEscrow allowlisted token ${escrowToken}`);
+  }
+
   const dir = path.join(__dirname, "..", "deployments");
   fs.mkdirSync(dir, { recursive: true });
   fs.writeFileSync(

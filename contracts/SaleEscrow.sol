@@ -3,7 +3,9 @@ pragma solidity ^0.8.24;
 
 import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
+import "@openzeppelin/contracts/access/AccessControl.sol";
 import "@openzeppelin/contracts/access/Ownable.sol";
+import "@openzeppelin/contracts/utils/Pausable.sol";
 import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 
 /// @title SaleEscrow
@@ -16,8 +18,10 @@ import "@openzeppelin/contracts/utils/ReentrancyGuard.sol";
 ///         stablecoin. The contract pays out the stored `amount` exactly; a
 ///         fee-on-transfer token would under-fund the shared balance and cause
 ///         later transfers to revert.
-contract SaleEscrow is Ownable, ReentrancyGuard {
+contract SaleEscrow is Ownable, AccessControl, Pausable, ReentrancyGuard {
     using SafeERC20 for IERC20;
+
+    bytes32 public constant SALE_ESCROW_OPERATOR_ROLE = keccak256("SALE_ESCROW_OPERATOR_ROLE");
 
     enum State { None, Funded, Released, Refunded }
 
@@ -35,12 +39,46 @@ contract SaleEscrow is Ownable, ReentrancyGuard {
     // Invariant: the contract's token balance must always cover the sum of all
     //            outstanding (non-terminal) escrow obligations.
     mapping(uint256 => Escrow) private _escrows;
+    mapping(address => bool) public allowedTokens;
 
     event EscrowFunded(uint256 indexed escrowId, string saleId, address indexed buyer, address indexed seller, uint256 amount);
     event EscrowReleased(uint256 indexed escrowId, address indexed seller, uint256 amount);
     event EscrowRefunded(uint256 indexed escrowId, address indexed buyer, uint256 amount);
+    event SaleEscrowOperatorUpdated(address indexed account, bool enabled);
+    event TokenAllowed(address indexed token, bool allowed);
 
-    constructor() Ownable(msg.sender) {}
+    constructor() Ownable(msg.sender) {
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(SALE_ESCROW_OPERATOR_ROLE, msg.sender);
+    }
+
+    modifier onlySaleEscrowOperator() {
+        _checkRole(SALE_ESCROW_OPERATOR_ROLE, msg.sender);
+        _;
+    }
+
+    function setSaleEscrowOperator(address account, bool enabled) external onlyOwner {
+        if (enabled) {
+            _grantRole(SALE_ESCROW_OPERATOR_ROLE, account);
+        } else {
+            _revokeRole(SALE_ESCROW_OPERATOR_ROLE, account);
+        }
+        emit SaleEscrowOperatorUpdated(account, enabled);
+    }
+
+    function setTokenAllowed(address token, bool allowed) external onlyOwner {
+        require(token != address(0), "zero token");
+        allowedTokens[token] = allowed;
+        emit TokenAllowed(token, allowed);
+    }
+
+    function pause() external onlyOwner {
+        _pause();
+    }
+
+    function unpause() external onlyOwner {
+        _unpause();
+    }
 
     /// @notice Open a new sale escrow and pull `amount` tokens from the caller.
     /// @dev    Caller (owner) must have pre-approved at least `amount` to this
@@ -59,9 +97,10 @@ contract SaleEscrow is Ownable, ReentrancyGuard {
         address token,
         uint256 amount,
         bytes32 termsHash
-    ) external onlyOwner nonReentrant returns (uint256 escrowId) {
+    ) external onlySaleEscrowOperator whenNotPaused nonReentrant returns (uint256 escrowId) {
         require(buyer != address(0) && seller != address(0), "zero party");
         require(token != address(0), "zero token");
+        require(allowedTokens[token], "token not allowed");
         escrowId = _nextEscrowId++;
         _escrows[escrowId] = Escrow({
             saleId: saleId,
@@ -79,7 +118,7 @@ contract SaleEscrow is Ownable, ReentrancyGuard {
     /// @notice Release the escrowed funds to the seller (sale completed).
     /// @dev    Requires state Funded. Sets state Released before transfer
     ///         (checks-effects-interactions).
-    function release(uint256 escrowId) external onlyOwner nonReentrant {
+    function release(uint256 escrowId) external onlySaleEscrowOperator whenNotPaused nonReentrant {
         Escrow storage e = _escrows[escrowId];
         require(e.state == State.Funded, "not funded");
         e.state = State.Released;
@@ -90,7 +129,7 @@ contract SaleEscrow is Ownable, ReentrancyGuard {
     /// @notice Refund the escrowed funds to the buyer (sale cancelled).
     /// @dev    Requires state Funded. Sets state Refunded before transfer
     ///         (checks-effects-interactions).
-    function refund(uint256 escrowId) external onlyOwner nonReentrant {
+    function refund(uint256 escrowId) external onlySaleEscrowOperator whenNotPaused nonReentrant {
         Escrow storage e = _escrows[escrowId];
         require(e.state == State.Funded, "not funded");
         e.state = State.Refunded;
@@ -112,5 +151,11 @@ contract SaleEscrow is Ownable, ReentrancyGuard {
         State s = _escrows[escrowId].state;
         require(s != State.None, "no escrow");
         return s;
+    }
+
+    function supportsInterface(
+        bytes4 interfaceId
+    ) public view override(AccessControl) returns (bool) {
+        return super.supportsInterface(interfaceId);
     }
 }

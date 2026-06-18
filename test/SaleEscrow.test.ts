@@ -24,6 +24,7 @@ describe("SaleEscrow", () => {
     const EscrowFactory = await ethers.getContractFactory("SaleEscrow");
     const escrow = (await EscrowFactory.deploy()) as SaleEscrow;
     await escrow.waitForDeployment();
+    await escrow.setTokenAllowed(await token.getAddress(), true);
 
     // Owner (platform wallet) gets AMOUNT and approves the escrow
     await token.mint(owner.address, AMOUNT);
@@ -100,6 +101,7 @@ describe("SaleEscrow", () => {
       await escrow.waitForDeployment();
       const escrowAddr = await escrow.getAddress();
       const tokenAddr = await token.getAddress();
+      await escrow.setTokenAllowed(tokenAddr, true);
 
       await token.mint(owner.address, AMOUNT * 2n);
       await token.connect(owner).approve(escrowAddr, AMOUNT * 2n);
@@ -113,7 +115,7 @@ describe("SaleEscrow", () => {
       expect(await token.balanceOf(escrowAddr)).to.equal(AMOUNT * 2n);
     });
 
-    it("reverts OwnableUnauthorizedAccount for non-owner", async () => {
+    it("reverts AccessControlUnauthorizedAccount for non-operator", async () => {
       const { escrow, token, buyer, seller, other } = await deploy();
       await expect(
         escrow
@@ -126,7 +128,7 @@ describe("SaleEscrow", () => {
             AMOUNT,
             TERMS_HASH,
           ),
-      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWithCustomError(escrow, "AccessControlUnauthorizedAccount");
     });
 
     it("reverts ERC20InsufficientAllowance and leaves no escrow row", async () => {
@@ -139,6 +141,7 @@ describe("SaleEscrow", () => {
       const EscrowFactory = await ethers.getContractFactory("SaleEscrow");
       const escrow = (await EscrowFactory.deploy()) as SaleEscrow;
       await escrow.waitForDeployment();
+      await escrow.setTokenAllowed(await token.getAddress(), true);
 
       await token.mint(owner.address, AMOUNT);
       // no approve
@@ -155,6 +158,32 @@ describe("SaleEscrow", () => {
       ).to.be.revertedWithCustomError(token, "ERC20InsufficientAllowance");
 
       await expect(escrow.escrowState(1)).to.be.revertedWith("no escrow");
+    });
+
+    it("reverts when token is not allowlisted", async () => {
+      const [owner, buyer, seller] = await ethers.getSigners();
+
+      const TokenFactory = await ethers.getContractFactory("MockERC20");
+      const token = (await TokenFactory.deploy()) as MockERC20;
+      await token.waitForDeployment();
+
+      const EscrowFactory = await ethers.getContractFactory("SaleEscrow");
+      const escrow = (await EscrowFactory.deploy()) as SaleEscrow;
+      await escrow.waitForDeployment();
+
+      await token.mint(owner.address, AMOUNT);
+      await token.connect(owner).approve(await escrow.getAddress(), AMOUNT);
+
+      await expect(
+        escrow.openAndFund(
+          "sale-no-allowlist",
+          buyer.address,
+          seller.address,
+          await token.getAddress(),
+          AMOUNT,
+          TERMS_HASH,
+        ),
+      ).to.be.revertedWith("token not allowed");
     });
   });
 
@@ -190,12 +219,12 @@ describe("SaleEscrow", () => {
       await expect(escrow.release(escrowId)).to.be.revertedWith("not funded");
     });
 
-    it("reverts OwnableUnauthorizedAccount for non-owner", async () => {
+    it("reverts AccessControlUnauthorizedAccount for non-operator", async () => {
       const { escrow, token, buyer, seller, other } = await deploy();
       const escrowId = await fundEscrow(escrow, token, buyer, seller);
       await expect(
         escrow.connect(other).release(escrowId),
-      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWithCustomError(escrow, "AccessControlUnauthorizedAccount");
     });
   });
 
@@ -231,12 +260,12 @@ describe("SaleEscrow", () => {
       await expect(escrow.refund(escrowId)).to.be.revertedWith("not funded");
     });
 
-    it("reverts OwnableUnauthorizedAccount for non-owner", async () => {
+    it("reverts AccessControlUnauthorizedAccount for non-operator", async () => {
       const { escrow, token, buyer, seller, other } = await deploy();
       const escrowId = await fundEscrow(escrow, token, buyer, seller);
       await expect(
         escrow.connect(other).refund(escrowId),
-      ).to.be.revertedWithCustomError(escrow, "OwnableUnauthorizedAccount");
+      ).to.be.revertedWithCustomError(escrow, "AccessControlUnauthorizedAccount");
     });
   });
 
@@ -252,6 +281,52 @@ describe("SaleEscrow", () => {
     it("escrowState(99) reverts 'no escrow'", async () => {
       const { escrow } = await deploy();
       await expect(escrow.escrowState(99)).to.be.revertedWith("no escrow");
+    });
+  });
+
+  describe("operator and pause controls", () => {
+    it("lets the owner delegate sale escrow operations", async () => {
+      const { escrow, token, buyer, seller, other } = await deploy();
+      const escrowAddr = await escrow.getAddress();
+      await token.mint(other.address, AMOUNT);
+      await token.connect(other).approve(escrowAddr, AMOUNT);
+
+      await expect(escrow.setSaleEscrowOperator(other.address, true))
+        .to.emit(escrow, "SaleEscrowOperatorUpdated")
+        .withArgs(other.address, true);
+
+      await escrow
+        .connect(other)
+        .openAndFund(
+          "sale-operator",
+          buyer.address,
+          seller.address,
+          await token.getAddress(),
+          AMOUNT,
+          TERMS_HASH,
+        );
+
+      expect(await escrow.escrowState(1)).to.equal(1);
+    });
+
+    it("blocks state-changing sale escrow operations while paused", async () => {
+      const { escrow, token, buyer, seller } = await deploy();
+      await escrow.pause();
+
+      await expect(
+        escrow.openAndFund(
+          "sale-paused",
+          buyer.address,
+          seller.address,
+          await token.getAddress(),
+          AMOUNT,
+          TERMS_HASH,
+        ),
+      ).to.be.revertedWithCustomError(escrow, "EnforcedPause");
+
+      await escrow.unpause();
+      await fundEscrow(escrow, token, buyer, seller);
+      expect(await escrow.escrowState(1)).to.equal(1);
     });
   });
 });
